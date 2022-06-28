@@ -1,0 +1,12 @@
+$(info The name of the shared library to be created is: $(SHLIB))
+
+CXX_STD = CXX14
+
+PKG_LIBS = @RCPPPAR_LIB@
+
+OBJECTS.zigzag = \
+    RcppHarmonic.o \
+    RcppZigZag.o \
+    RcppExports.o
+
+OBJECTS = $(OBJECTS.zigzag)
