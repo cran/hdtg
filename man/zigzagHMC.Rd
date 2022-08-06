@@ -2,11 +2,11 @@
 % Please edit documentation in R/zigzagHMC.R
 \name{zigzagHMC}
 \alias{zigzagHMC}
-\title{Sample from a truncated Gaussian distribution with the zigzag HMC}
+\title{Sample from a truncated Gaussian distribution}
 \usage{
 zigzagHMC(
   n,
-  burnin,
+  burnin = 0,
   mean,
   cov,
   prec = NULL,
@@ -21,7 +21,7 @@ zigzagHMC(
 \arguments{
 \item{n}{number of samples after burn-in.}
 
-\item{burnin}{number of burn-in samples.}
+\item{burnin}{number of burn-in samples (default = 0).}
 
 \item{mean}{a d-dimensional mean vector.}
 
@@ -35,14 +35,14 @@ zigzagHMC(
 
 \item{init}{a d-dimensional vector of the initial value. \code{init} must satisfy all constraints. If \code{init = NULL}, a random initial value will be used.}
 
-\item{step}{step size for Zigzag-HMC or Zigzag-NUTS (if \code{nutsFlg = TRUE}). Default value is the emipirically optimal choice: sqrt(2)(lambda)^(-1/2) for Zigzag-HMC and 0.1(lambda)^(-1/2) for Zigzag-NUTS, where lambda is the minimal eigenvalue of the precision matrix.}
+\item{step}{step size for Zigzag-HMC or Zigzag-NUTS (if \code{nutsFlg = TRUE}). Default value is the empirically optimal choice: sqrt(2)(lambda)^(-1/2) for Zigzag-HMC and 0.1(lambda)^(-1/2) for Zigzag-NUTS, where lambda is the minimal eigenvalue of the precision matrix.}
 
 \item{nutsFlg}{logical. If \code{TRUE} the No-U-Turn sampler will be used (Zigzag-NUTS).}
 
 \item{rSeed}{random seed (default = 1).}
 }
 \value{
-(n + burnin) x d matrix of samples. The first \code{burnin} samples are from the user specified warm-up iterations.
+an (n + burnin)*d matrix of samples. The first \code{burnin} samples are from the user specified warm-up iterations.
 }
 \description{
 Generate MCMC samples from a d-dimensional truncated Gaussian distribution with element-wise truncations using the Zigzag Hamiltonian Monte Carlo sampler (Zigzag-HMC).
@@ -53,13 +53,8 @@ d <- 10
 A <- matrix(runif(d^2)*2-1, ncol=d)
 covMat <- t(A) \%*\% A
 initial <- rep(1, d)
-results <- zigzagHMC(
-n = 1000,
-burnin = 1000,
-mean = rep(0, d),
-cov = covMat,
-lowerBounds = rep(0, d),
-upperBounds = rep(Inf, d))
+results <- zigzagHMC(n = 1000, burnin = 1000, mean = rep(0, d), cov = covMat,
+lowerBounds = rep(0, d), upperBounds = rep(Inf, d))
 
 }
 \references{
