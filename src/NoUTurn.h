@@ -48,86 +48,92 @@ namespace nuts {
                                                                              zzEngine(*zigzag),
                                                                              uniGenerator(UniformGenerator(seed,
                                                                                                            randomFlg)) {
-//            std::cerr << "nuts constructed" << '\n' << std::endl;
         }
 
         ~NoUTurn() = default;
 
-//        template<typename T>
-//        void printDblSpan(T &span) {
-//            for (auto e: span) std::cout << e << ' ';
-//        }
+        // Utility function for debugging purpose
+        template<typename T>
+        void printDblSpan(T &span) {
+           for (auto e: span) std::cout << e << ' ';
+        }
 
 
-        std::vector<double> takeOneStep(DblSpan initialPosition, DblSpan initialMomentum) {
+        std::vector<double> generateNextState(DblSpan initialPosition, DblSpan initialMomentum) {
 
-            std::vector<double> endPosition(initialPosition.size(), 0);
+            
             const double initialJointDensity = zzEngine.getLogPDFnoDet(initialPosition, initialMomentum);
             double logSliceU = log(uniGenerator.getUniform()) + initialJointDensity;
 
             std::unique_ptr<Eigen::VectorXd> gPtr = zzEngine.getLogdGradient(initialPosition);
             DblSpan gradient(*gPtr);
 
-            TreeState *newState = new TreeState(initialPosition, initialMomentum, gradient, 1, true,
-                                                0, 0, uniGenerator);
-            SharedPtrTreeState trajectoryTree = zz::make_unique<TreeState>(*newState);
+            TreeState *newState = new TreeState(
+                initialPosition, initialMomentum, gradient, 1, true, 0, 0, uniGenerator
+            );
+            SharedPtrTreeState trajectoryTree = std::shared_ptr<TreeState>(newState);
 
             int height = 0;
-
-            while (trajectoryTree->flagContinue) {
-                //std::cerr << "***************appear once" << std::endl;
-                DblSpan tmp = updateTrajectoryTree(trajectoryTree, height, logSliceU, initialJointDensity);
-                if (!tmp.empty()) {
-                    for (int i = 0; i < endPosition.size(); ++i) {
-                        endPosition[i] = tmp[i];
-                    }
-                }
-
+            while (trajectoryTree->flagContinue && height <= maxHeight) {
+                doubleTrajectoryTree(trajectoryTree, height, logSliceU, initialJointDensity);
                 height++;
-
-                if (height > maxHeight) {
-                    trajectoryTree->flagContinue = false;
-                }
             }
-            return endPosition;
+            DblSpan sampleSpan = trajectoryTree->getSample();
+            std::vector<double> sample(sampleSpan.begin(), sampleSpan.end());
+            return sample;
         }
 
-        DblSpan updateTrajectoryTree(SharedPtrTreeState trajectoryTree,
-                                     int depth,
+        void doubleTrajectoryTree(SharedPtrTreeState trajectoryTree,
+                                     int height,
                                      double logSliceU,
                                      double initialJointDensity) {
-            DblSpan endPosition;
             int direction = (uniGenerator.getUniform() < 0.5) ? -1 : 1;
-            UniPtrTreeState nextTrajectoryTree = buildTree(
-                    trajectoryTree->getPosition(direction), trajectoryTree->getMomentum(direction),
+            UniPtrTreeState nextTrajectoryTree = buildNextTree(
+                    trajectoryTree->getPosition(direction), 
+                    trajectoryTree->getMomentum(direction),
                     trajectoryTree->getGradient(direction),
-                    direction, logSliceU, depth, stepSize, initialJointDensity);
+                    direction, logSliceU, height, stepSize, initialJointDensity);
 
             if ((*nextTrajectoryTree).flagContinue) {
-
-                const double acceptProb = (double) (*nextTrajectoryTree).numNodes / (double) trajectoryTree->numNodes;
-                if (uniGenerator.getUniform() < acceptProb) {
-                    endPosition = (*nextTrajectoryTree).getSample();
-                }
-            }
-
-            trajectoryTree->mergeNextTree((*nextTrajectoryTree), direction);
-
-            return endPosition;
-        }
-
-        UniPtrTreeState buildTree(DblSpan position, DblSpan momentum, DblSpan gradient, int direction,
-                                  double logSliceU, int height, double stepSize, double initialJointDensity) {
-            //std::cerr << "height is" << height << std::endl;
-            if (height == 0) {
-                return buildBaseCase(position, momentum, gradient, direction, logSliceU, stepSize, initialJointDensity);
+                bool swapSampling = true;
+                trajectoryTree->mergeNextTree((*nextTrajectoryTree), direction, swapSampling);
             } else {
-                return buildRecursiveCase(position, momentum, gradient, direction, logSliceU, height, stepSize,
-                                          initialJointDensity);
+                trajectoryTree->flagContinue = false;
             }
         }
 
-        UniPtrTreeState buildBaseCase(DblSpan inPosition, DblSpan inMomentum, DblSpan inGradient, int direction,
+        UniPtrTreeState buildNextTree(DblSpan position, DblSpan momentum, DblSpan gradient, int direction,
+                                  double logSliceU, int height, double stepSize, double initialJointDensity) {
+            if (height == 0) {
+                return buildNextSingletonTree(position, momentum, gradient, direction, logSliceU, stepSize, initialJointDensity);
+            } 
+            
+            UniPtrTreeState subtree = buildNextTree(
+                position, momentum, gradient, direction, logSliceU, height - 1, 
+                stepSize, initialJointDensity
+            );
+            
+            if ((*subtree).flagContinue) {
+
+                UniPtrTreeState nextSubtree = buildNextTree(
+                    (*subtree).getPosition(direction), 
+                    (*subtree).getMomentum(direction), 
+                    (*subtree).getGradient(direction), 
+                    direction, logSliceU, height - 1, 
+                    stepSize, initialJointDensity
+                );
+                if ((*nextSubtree).flagContinue) {
+                    bool swapSampling = false;
+                    (*subtree).mergeNextTree((*nextSubtree), direction, swapSampling);
+                } else {
+                    (*subtree).flagContinue = false;
+                }
+                
+            }
+            return subtree;
+        }
+
+        UniPtrTreeState buildNextSingletonTree(DblSpan inPosition, DblSpan inMomentum, DblSpan inGradient, int direction,
                                       double logSliceU, double stepSize, double initialJointDensity) {
             // Make deep copy of position and momentum
             std::vector<double> positionVec;
@@ -142,21 +148,8 @@ namespace nuts {
             DblSpan momentum{momentumVec};
             DblSpan gradient{gradientVec};
 
-            // "one reversibleHMC integral
-//            std::cout << "before position is:";
-//            printDblSpan(position);
-//            std::cout << "before momentum is:";
-//            printDblSpan(momentum);
-//            std::cout << "\n";
-
             zzEngine.reversiblePositionMomentumUpdate(position, momentum, gradient, direction, stepSize);
-
-//            std::cout << "after position is:";
-//            printDblSpan(position);
-//            std::cout << "after momentum is:";
-//            printDblSpan(momentum);
-//            std::cout << "\n";
-//            std::cout << "\n";
+            
             double logJointProbAfter = zzEngine.getLogPDFnoDet(position, momentum);
 
             const int numNodes = (logSliceU <= logJointProbAfter ? 1 : 0);
@@ -167,33 +160,13 @@ namespace nuts {
             const double acceptProb = std::min(1.0, exp(logJointProbAfter - initialJointDensity));
             const int numAcceptProbStates = 1;
 
-            //hmcProvider.setParameter(inPosition);
             TreeState *newState = new TreeState(position, momentum, gradient, numNodes,
                                                 flagContinue, acceptProb,
                                                 numAcceptProbStates, uniGenerator);
-            return zz::make_unique<TreeState>(*newState);
+            return UniPtrTreeState(newState);
         }
 
 
-        UniPtrTreeState buildRecursiveCase(DblSpan inPosition, DblSpan inMomentum, DblSpan gradient, int direction,
-                                           double logSliceU, int height, double stepSize, double initialJointDensity) {
-
-            UniPtrTreeState subtree = buildTree(inPosition, inMomentum, gradient, direction, logSliceU,
-                                                height - 1, // Recursion
-                                                stepSize, initialJointDensity);
-
-            if ((*subtree).flagContinue) {
-
-                UniPtrTreeState nextSubtree = buildTree((*subtree).getPosition(direction),
-                                                        (*subtree).getMomentum(direction),
-                                                        (*subtree).getGradient(direction), direction,
-                                                        logSliceU, height - 1, stepSize,
-                                                        initialJointDensity);
-
-                (*subtree).mergeNextTree((*nextSubtree), direction);
-            }
-            return subtree;
-        }
 
         double logProbErrorTol = 100.0;
         const int maxHeight = 10;
@@ -209,7 +182,6 @@ namespace nuts {
             bool randomFlg,
             double stepSize,
             std::shared_ptr<zz::ZigZag<zz::DoubleSseTypeInfo>> ptr) {
-//        std::cerr << "Factory: SSE" << std::endl;
         return zz::make_unique<nuts::NoUTurn>(logProbErrorTol, maxHeight, seed, randomFlg, stepSize, ptr);
     }
 }

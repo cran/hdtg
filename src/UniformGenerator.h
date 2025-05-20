@@ -1,6 +1,7 @@
 //
 // Created by Zhenyu Zhang on 2/1/22.
 //
+#include <random>
 
 #ifndef NOUTURN_HPP_UNIFORMGENERATOR_H
 #define NOUTURN_HPP_UNIFORMGENERATOR_H
@@ -12,7 +13,6 @@ public:
         count = 1;
         generator = std::mt19937(seed);
         distribution = std::uniform_real_distribution<double>(0, 1);
-//        std::cerr << "uniform generator constructed" << '\n' << std::endl;
     }
 
     double getUniform() {
@@ -26,7 +26,6 @@ public:
             tmp = count % 10 / 10.;
             ++count;
         }
-        //std::cerr << tmp << std::endl;
         return tmp;
     }
 

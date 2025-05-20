@@ -18,7 +18,6 @@
 #endif // TIMING
 
 #include "threefry.h"
-//#include "dr_evomodel_operators_NativeZigZag.h"
 #include "MemoryManagement.h"
 #include "Simd.h"
 #include "ZigZag.h"
@@ -34,15 +33,16 @@ namespace nuts {
     public:
 
         TreeState(DblSpan position, DblSpan momentum, DblSpan gradient,
-                  int numNodes, bool flagContinue,
-                  double cumAcceptProb, int numAcceptProbStates, UniformGenerator &generator) :
+                  int numAcceptableStates, bool flagContinue,
+                  double cumAcceptProb, int numStates, UniformGenerator &generator) :
                                                         dim(position.size()),
                                                         positionTri(position.size() * 3, 0),
                                                         momentumTri(position.size() * 3, 0),
-                                                        gradientTri(position.size() * 3, 0), numNodes(numNodes),
+                                                        gradientTri(position.size() * 3, 0), 
+                                                        numAcceptableStates(numAcceptableStates),
                                                         flagContinue(flagContinue),
                                                         cumAcceptProb(cumAcceptProb),
-                                                        numAcceptProbStates(numAcceptProbStates),
+                                                        numStates(numStates),
                                                         uniGenerator(generator) {
             for (int i = 0; i < 3; ++i) {
                 for (int j = 0; j < dim; ++j) {
@@ -98,42 +98,48 @@ namespace nuts {
             return direction + 1;
         }
 
-        bool computeStopCriterion() {
-            DblSpan positionPlus = getPosition(1);
-            DblSpan positionMinus = getPosition(-1);
-            DblSpan momentumPlus = getMomentum(1);
-            DblSpan momentumMinus = getMomentum(-1);
+        bool checkNoUturn() {
+            DblSpan positionFront = getPosition(1);
+            DblSpan positionRear = getPosition(-1);
+            DblSpan momentumFront = getMomentum(1);
+            DblSpan momentumRear = getMomentum(-1);
 
-            double sumPlus = 0;
-            double sumMinus = 0;
-            double positionDiffI;
-            for (int i = 0; i < positionPlus.size(); ++i) {
-                positionDiffI = positionPlus[i] - positionMinus[i];
-                sumPlus += positionDiffI * momentumPlus[i];
-                sumMinus += positionDiffI * momentumMinus[i];
+            // Derivatives of 0.5 * \| positionFront - positionRear \|^2, which are
+            // inner products with the position difference and front/rear momenta.
+            double distDerivFront = 0; 
+            double distDerivRear = 0;
+            for (int i = 0; i < positionFront.size(); ++i) {
+                distDerivFront += (positionFront[i] - positionRear[i]) * momentumFront[i];
+                distDerivRear += (positionFront[i] - positionRear[i]) * momentumRear[i];
             }
 
-            return (sumPlus > 0) && (sumMinus > 0);
+            return (distDerivFront > 0) && (distDerivRear > 0);
         }
 
-        void mergeNextTree(TreeState nextTree, int direction) {
+        void mergeNextTree(TreeState nextTree, int direction, bool swapSampling) {
 
             setPosition(direction, nextTree.getPosition(direction));
             setMomentum(direction, nextTree.getMomentum(direction));
             setGradient(direction, nextTree.getGradient(direction));
 
-            updateSample(nextTree);
+            updateSample(nextTree, swapSampling);
 
-            numNodes += nextTree.numNodes;
-            flagContinue = nextTree.flagContinue && computeStopCriterion();
+            numAcceptableStates += nextTree.numAcceptableStates;
+            flagContinue = nextTree.flagContinue && checkNoUturn();
 
             cumAcceptProb += nextTree.cumAcceptProb;
-            numAcceptProbStates += nextTree.numAcceptProbStates;
+            numStates += nextTree.numStates;
         }
 
-        void updateSample(TreeState nextTree) {
-            if (nextTree.numNodes > 0
-                && uniGenerator.getUniform() < ((double) nextTree.numNodes / (double) (numNodes + nextTree.numNodes))) {
+        void updateSample(TreeState nextTree, bool swapSampling) {
+            double samplingWeightOnNext;
+            if (swapSampling) {
+              samplingWeightOnNext = (double) nextTree.numAcceptableStates / (double) numAcceptableStates;
+            } else {
+              samplingWeightOnNext = 
+                (double) nextTree.numAcceptableStates / (double) (numAcceptableStates + nextTree.numAcceptableStates);
+            }
+            if (uniGenerator.getUniform() < samplingWeightOnNext) {
                 setSample(nextTree.getSample());
             }
         }
@@ -143,11 +149,11 @@ namespace nuts {
         std::vector<double> momentumTri;
         std::vector<double> gradientTri;
 
-        int numNodes;
+        int numAcceptableStates;
         bool flagContinue;
 
         double cumAcceptProb;
-        int numAcceptProbStates;
+        int numStates;
         UniformGenerator &uniGenerator;
     };
 }

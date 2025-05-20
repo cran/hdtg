@@ -5,20 +5,21 @@
 \title{Sample from a truncated Gaussian distribution with the harmonic HMC}
 \usage{
 harmonicHMC(
-  n,
+  nSample,
   burnin = 0,
   mean,
   choleskyFactor,
-  F,
-  g,
+  constrainDirec,
+  constrainBound,
   init,
   time = c(pi/8, pi/2),
   precFlg,
-  diagnosticMode = FALSE
+  seed = NULL,
+  extraOutputs = c()
 )
 }
 \arguments{
-\item{n}{number of samples after burn-in.}
+\item{nSample}{number of samples after burn-in.}
 
 \item{burnin}{number of burn-in samples (default = 0).}
 
@@ -27,9 +28,9 @@ harmonicHMC(
 \item{choleskyFactor}{upper triangular matrix R from Cholesky decomposition of
 precision or covariance matrix into R^TR.}
 
-\item{F}{F matrix (k-by-d matrix where k is the number of linear constraints).}
+\item{constrainDirec}{the k-by-d F matrix (k is the number of linear constraints).}
 
-\item{g}{g vector (k-dimensional).}
+\item{constrainBound}{the k-dimensional g vector.}
 
 \item{init}{a d-dimensional vector of the initial value. \code{init} must satisfy all constraints.}
 
@@ -41,14 +42,15 @@ from for each iteration.}
 \item{precFlg}{logical. whether \code{choleskyFactor} is from precision
 (\code{TRUE}) or covariance matrix (\code{FALSE}).}
 
-\item{diagnosticMode}{logical. \code{TRUE} for also returning the bounce distances
-for each sample.}
+\item{seed}{random seed (default = 1).}
+
+\item{extraOutputs}{vector of strings. "numBounces" and/or "bounceDistances"
+can be requested, with the latter containing the distances in-between bounces
+for each sample and hence incurring significant computational and memory costs.}
 }
 \value{
-List of
-\code{samples}: (n + burnin) x d matrix of samples (including burnin samples) and
-\code{bounceDistances}: list of bounces for each sample (only present if
-\code{diagnosticMode} is \code{TRUE}).
+\code{samples}: nSample-by-d matrix of samples
+or, if \code{extraOutputs} is non-empty, a list of \code{samples} and the extra outputs.
 }
 \description{
 Generate MCMC samples from a d-dimensional truncated Gaussian distribution
@@ -62,10 +64,10 @@ A <- matrix(runif(d^2)*2 - 1, ncol=d)
 Sigma <- t(A) \%*\% A
 R <- cholesky(Sigma)
 mu <- rep(0, d)
-F <- diag(d)
-g <- rep(0,d)
+constrainDirec <- diag(d)
+constrainBound <- rep(0,d)
 initial <- rep(1, d)
-results <- harmonicHMC(1000, 1000, mu, R, F, g, initial, precFlg = FALSE)
+results <- harmonicHMC(1000, 1000, mu, R, constrainDirec, constrainBound, initial, precFlg = FALSE)
 }
 \references{
 \insertRef{pakman2014exact}{hdtg}

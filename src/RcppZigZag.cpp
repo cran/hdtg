@@ -276,13 +276,33 @@ Rcpp::List oneIteration(SEXP sexp,
     return list;
 }
 
+// [[Rcpp::export(.oneIrreversibleIteration)]]
+Rcpp::List oneIrreversibleIteration(SEXP sexp,
+                                    NumericVector &position,
+                                    NumericVector &velocity,
+                                    double time) {
+    auto ptr = parsePtr(sexp);
+
+    auto returnValue = ptr->operateIrreversible(
+            zz::DblSpan(position.begin(), position.end()),
+            zz::DblSpan(velocity.begin(), velocity.end()),
+            time
+    );
+    Rcpp::List list = Rcpp::List::create(
+            Rcpp::Named("returnValue") = returnValue,
+            Rcpp::Named("position") = position,
+            Rcpp::Named("velocity") = velocity);
+
+    return list;
+}
+
 // [[Rcpp::export(.oneNutsIteration)]]
 Rcpp::List oneNutsIteration(SEXP sexp,
                             NumericVector &position,
                             NumericVector &momentum) {
     auto ptrNuts = parsePtrNuts(sexp);
 
-    auto returnValue = ptrNuts->takeOneStep(zz::DblSpan(position.begin(), position.end()),
+    auto returnValue = ptrNuts->generateNextState(zz::DblSpan(position.begin(), position.end()),
                                             zz::DblSpan(momentum.begin(), momentum.end()));
     Rcpp::List list = Rcpp::List::create(Rcpp::Named("position") = returnValue);
     return list;

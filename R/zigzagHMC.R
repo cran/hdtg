@@ -2,134 +2,210 @@
 #'
 #' Generate MCMC samples from a d-dimensional truncated Gaussian distribution with element-wise truncations using the Zigzag Hamiltonian Monte Carlo sampler (Zigzag-HMC).
 #'
-#' @param n number of samples after burn-in.
+#' @param nSample number of samples after burn-in.
 #' @param burnin number of burn-in samples (default = 0).
 #' @param mean a d-dimensional mean vector.
-#' @param cov a d-by-d covariance matrix of the Gaussian distribution. At least one of `prec` and `cov` should be provided.
 #' @param prec a d-by-d precision matrix of the Gaussian distribution. 
 #' @param lowerBounds a d-dimensional vector specifying the lower bounds. `-Inf` is accepted.  
 #' @param upperBounds a d-dimensional vector specifying the upper bounds. `Inf` is accepted. 
 #' @param nutsFlg logical. If `TRUE` the No-U-Turn sampler will be used (Zigzag-NUTS).
+#' @param precondition logical. If `TRUE`, the precision matrix will be preconditioned so that its diagonals (i.e. conditional variances) are all 1.
 #' @param init a d-dimensional vector of the initial value. `init` must satisfy all constraints. If `init = NULL`, a random initial value will be used.
-#' @param step step size for Zigzag-HMC or Zigzag-NUTS (if `nutsFlg = TRUE`). Default value is the empirically optimal choice: sqrt(2)(lambda)^(-1/2) for Zigzag-HMC and 0.1(lambda)^(-1/2) for Zigzag-NUTS, where lambda is the minimal eigenvalue of the precision matrix.   
-#' @param rSeed random seed (default = 1).
+#' @param stepsize step size for Zigzag-HMC or Zigzag-NUTS (if `nutsFlg = TRUE`). Default value is the empirically optimal choice: sqrt(2)(lambda)^(-1/2) for Zigzag-HMC and 0.1(lambda)^(-1/2) for Zigzag-NUTS, where lambda is the minimal eigenvalue of the precision matrix.   
+#' @param seed random seed (default = 1).
+#' @param diagnosticMode logical. `TRUE` for also returning diagnostic information such as the stepsize used. 
 #'
-#' @return an (n + burnin)*d matrix of samples. The first `burnin` samples are from the user specified warm-up iterations.
+#' @return an nSample-by-d matrix of samples. If `diagnosticMode` is `TRUE`, a list with additional diagnostic information is returned. 
 #' @export
 #' @examples
 #' set.seed(1)
 #' d <- 10
 #' A <- matrix(runif(d^2)*2-1, ncol=d)
 #' covMat <- t(A) %*% A
+#' precMat <- solve(covMat)
 #' initial <- rep(1, d)
-#' results <- zigzagHMC(n = 1000, burnin = 1000, mean = rep(0, d), cov = covMat,
+#' results <- zigzagHMC(nSample = 1000, burnin = 1000, mean = rep(0, d), prec = precMat,
 #' lowerBounds = rep(0, d), upperBounds = rep(Inf, d))
 #'
 #' @references
-#' \insertRef{nishimura2021hamiltonian}{hdtg}
+#' \insertRef{nishimura2024zigzag}{hdtg}
 #'
 #' \insertRef{nishimura2020discontinuous}{hdtg}
 
-zigzagHMC <- function(n,
+zigzagHMC <- function(nSample,
                       burnin = 0,
                       mean,
-                      cov,
-                      prec = NULL,
+                      prec,
                       lowerBounds,
                       upperBounds,
                       init = NULL,
-                      step = NULL,
+                      stepsize = NULL,
                       nutsFlg = FALSE,
-                      rSeed = 1) {
-  ndim <- length(mean)
+                      precondition = FALSE,
+                      seed = NULL,
+                      diagnosticMode = FALSE) {
   
-  if (!is.null(prec)) {
-    stopifnot("precision matrix contains NaN" = !any(is.na(prec)))
-  } else if (!is.null(cov)) {
-    stopifnot("covariance matrix contains NaN" = !any(is.na(cov)))
-    prec <- solve(cov)
-  } else {
-    stop("must provide precision or covariance matrix")
-  }
-  
-  stopifnot(
-    "precision / covariance matrix has incompatible dimensions" = (nrow(prec) == ndim &&
-                                                                     ncol(prec) == ndim)
-  )
-  stopifnot(
-    "some lower bound is larger than the corresponding upper bound" = sum(lowerBounds < upperBounds) == ndim
-  )
-  
-  if (!is.null(init)) {
-    stopifnot(
-      "initial position is not compatiable with the truncation bounds" = (sum(lowerBounds < init) == ndim) &&
-        (sum(init < upperBounds) == ndim)
-    )
-  } else {
+  validateInput(mean, prec, lowerBounds, upperBounds, init)
+  if (is.null(init)) {
     init <- getInitialPosition(mean, lowerBounds, upperBounds)
   }
   
-  energyGrad <- function (x) {
-    if (length(x) == 1) {
-      return(prec[, x])
-    } else {
-      return(drop(prec %*% x))
-    }
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+  cpp_seed <- sample.int(.Machine$integer.max, size = 1)
+  
+  if (precondition) {
+    precondScaleFactor <- sqrt(diag(prec))
+    init <- precondScaleFactor * init
+    mean <- precondScaleFactor * mean
+    prec <- stats::cov2cor(prec)
   }
   
-  samples <- array(0, c(n + burnin, ndim))
+  ndim <- length(mean)
+  samples <- array(0, c(nSample, ndim))
   
   if (nutsFlg) {
-    if (!is.null(step)) {
-      t <- step
-    } else{
-      t <- 0.1 / sqrt(min(mgcv::slanczos(
-        A = prec, k = 1, kl = 1
-      )[['values']]))
+    if (is.null(stepsize)) {
+      stepsize <- 0.1 / sqrt(computeExtremeEigenval(prec))
     }
-    cat("NUTS base step size is", t, "\n")
     engine <- createNutsEngine(
       dimension = ndim,
       lowerBounds = lowerBounds,
       upperBounds = upperBounds,
       flags = 128,
-      seed = rSeed,
-      stepSize = t,
+      seed = cpp_seed,
+      stepSize = stepsize,
       mean = mean,
       precision = prec
     )
     
   } else {
-    if (!is.null(step)) {
-      t <- step
-    } else{
-      t <-
-        sqrt(2) / sqrt(min(mgcv::slanczos(
-          A = prec, k = 1, kl = 1
-        )[['values']], na.rm = T))
+    if (is.null(stepsize)) {
+      stepsize <- sqrt(2) / sqrt(computeExtremeEigenval(prec))
     }
-    cat("HZZ step size is", t, "\n")
     engine <- createEngine(
       dimension = ndim,
       lowerBounds = lowerBounds,
       upperBounds = upperBounds,
       flags = 128,
-      seed = rSeed,
+      seed = cpp_seed,
       mean = mean,
       precision = prec
     )
   }
   
   position <- init
-  for (i in 1:(n + burnin)) {
+  for (i in 1:(nSample + burnin)) {
     position <- getZigzagSample(
       position = position,
       momentum = NULL,
       nutsFlg = nutsFlg,
       engine = engine,
-      stepZZHMC = t
+      stepZZHMC = stepsize
     )
-    samples[i, ] <- position
+    if (i > burnin) {
+      if (precondition) {
+        samples[i - burnin, ] <- position / precondScaleFactor
+      } else {
+        samples[i - burnin, ] <- position
+      }
+    }
   }
-  return(samples)
+  if (diagnosticMode) {
+    return(list("samples" = samples, "stepsize" = stepsize))
+  } else {
+    return(samples)
+  }
+}
+
+markovianZigzag <- function(nSample,
+                            burnin = 0,
+                            mean,
+                            prec,
+                            lowerBounds,
+                            upperBounds,
+                            init = NULL,
+                            stepsize = NULL,
+                            seed = 1,
+                            diagnosticMode = FALSE,
+                            nStatusUpdate = 0L) {
+  
+  validateInput(mean, prec, lowerBounds, upperBounds, init)
+  if (is.null(init)) {
+    init <- getInitialPosition(mean, lowerBounds, upperBounds)
+  }
+  nIterPerUpdate <- ceiling((nSample + burnin) / nStatusUpdate)
+  
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+  cpp_seed <- sample.int(.Machine$integer.max, size = 1)
+  ndim <- length(mean)
+  samples <- array(0, c(nSample, ndim))
+  
+  if (is.null(stepsize)) {
+    stepsize <- sqrt(2) / sqrt(computeExtremeEigenval(prec))
+  }
+  engine <- createEngine(
+    dimension = ndim,
+    lowerBounds = lowerBounds,
+    upperBounds = upperBounds,
+    flags = 128,
+    seed = cpp_seed,
+    mean = mean,
+    precision = prec
+  )
+  
+  velocity <- 2 * stats::rbinom(ndim, 1, .5) - 1
+  state <- list(position = init, velocity = velocity)
+  for (i in 1:(nSample + burnin)) {
+    state <- getMarkovianZigzagSample(
+      position = state$position,
+      velocity = state$velocity,
+      engine = engine,
+      travelTime = stepsize
+    )
+    if (i > burnin) {
+      samples[i - burnin, ] <- state$position
+    }
+    if (i %% nIterPerUpdate == 0) {
+      print(sprintf("%s iterations completed.", as.integer(i)))
+    }
+  }
+  if (diagnosticMode) {
+    return(list("samples" = samples, "stepsize" = stepsize))
+  } else {
+    return(samples)
+  }
+}
+
+computeExtremeEigenval <- function(symMatrix, smallest = TRUE, tol = .Machine$double.eps^.5) {
+  if (smallest) {
+    nLargest <- 0
+    nSmallest <- 1
+  } else {
+    nLargest <- 1
+    nSmallest <- 0
+  }
+  return(
+    mgcv::slanczos(A = symMatrix, k = nLargest, kl = nSmallest, tol = tol)[['values']]
+  )
+}
+
+validateInput <- function(mean, prec, lowerBounds, upperBounds, init) {
+  ndim <- length(mean)
+  stopifnot(
+    "precision/covariance matrix size does not match the mean vector" = 
+      (nrow(prec) == ndim && ncol(prec) == ndim)
+  )
+  stopifnot(
+    "some lower bound is larger than the corresponding upper bound" = sum(lowerBounds < upperBounds) == ndim
+  )
+  if (!is.null(init)) {
+    stopifnot(
+      "initial position is not compatiable with the truncation bounds" = (sum(lowerBounds < init) == ndim) &&
+        (sum(init < upperBounds) == ndim)
+    )
+  }
 }

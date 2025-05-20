@@ -70,13 +70,41 @@ getZigzagSample <- function(position,
   return(res$position)
 }
 
-# ' Draw a random Laplace momentum
-# '
-# ' Generate a d-dimensional momentum where the density of each element is proportional to exp(-|pi|).  
-# ' 
-# ' @param d dimension of the momentum.
-# '
-# ' @return a d-dimensional Laplace-distributed momentum.
+#' Draw one Markovian zigzag sample
+#'
+#' Simulate the Markovian zigzag dynamics for a given position over a specified travel time.
+#'
+#' @param position a d-dimensional position vector.
+#' @param velocity optional d-dimensional velocity vector. If NULL, it will be generated within the function.
+#' @param engine an object representing the Markovian zigzag engine, typically containing settings and state required for the simulation.
+#' @param travelTime the duration for which the dynamics are simulated.
+#'
+#' @return A list containing the position and velocity after simulating the dynamics.
+#' @export
+getMarkovianZigzagSample <- function(position,
+                                     velocity = NULL,
+                                     engine,
+                                     travelTime) {
+  if (is.null(velocity)) {
+    velocity <- 2 * stats::rbinom(length(position), 1, .5) - 1
+  }
+  
+  res <- .oneIrreversibleIteration(
+    sexp = engine$engine,
+    position = position,
+    velocity = velocity,
+    time = travelTime
+  )
+  return(list(position=res$position, velocity=res$velocity))
+}
+
+#' Draw a random Laplace momentum
+#'
+#' Generate a d-dimensional momentum where the density of each element is proportional to exp(-|pi|).  
+#' 
+#' @param d dimension of the momentum.
+#'
+#' @return a d-dimensional Laplace-distributed momentum.
 drawLaplaceMomentum <- function(d) {
   return((2 * (stats::runif(d) > .5) - 1) * stats::rexp(d, rate = 1))
 }

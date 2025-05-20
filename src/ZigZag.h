@@ -29,10 +29,10 @@
 #endif // TIMING
 
 #include "threefry.h"
-//#include "dr_evomodel_operators_NativeZigZag.h"
 #include "MemoryManagement.h"
 #include "Simd.h"
 #include "AbstractZigZag.h"
+#include "UniformGenerator.h"
 
 #include <Eigen/Dense>
 
@@ -65,21 +65,18 @@ namespace zz {
                             mmAction(dimension),
                             mmGradient(dimension),
                             mmMomentum(dimension),
+                            unifRv(new double[dimension]),
                             meanV(dimension),
                             precisionMat(dimension, dimension),
                             meanSetFlg(false),
                             precisionSetFlg(false),
                             flags(flags),
                             nThreads(nThreads),
-                            seed(seed){
-//            std::cerr << "ZigZag constructed" << std::endl;
-//            std::cout << '\n';
+                            seed(seed) {
             if (flags & zz::Flags::TBB) {
                 if (nThreads <= 0) {
                     nThreads = tbb::this_task_arena::max_concurrency();
                 }
-
-//                std::cout << "Using " << nThreads << " threads" << std::endl;
 
                 control = std::make_shared<tbb::global_control>(tbb::global_control::max_allowed_parallelism, nThreads);
             }
@@ -88,6 +85,8 @@ namespace zz {
             for (int i = 0; i < nThreads; ++i) {
                 rng[i].seed(static_cast<std::uint64_t>(seed + i));
             }
+            generator = std::mt19937(seed);
+            distribution = std::uniform_real_distribution<double>(0, 1);
         }
 
         virtual ~ZigZag() {
@@ -166,7 +165,6 @@ namespace zz {
                        DblSpan gradient,
                        DblSpan momentum,
                        double time) {
-//            if (!meanSetFlg || !precisionSetFlg) std::cerr << "mean or precision is not set!" << std::endl;
             Dynamics<double> dynamics(position, velocity, action, gradient, momentum, lowerBounds,
                                       upperBounds);
             return operateImpl(dynamics, time);
@@ -196,8 +194,6 @@ namespace zz {
                        DblSpan momentum,
                        double time) {
 
-//            if (!meanSetFlg || !precisionSetFlg) std::cerr << "mean or precision is not set!" << std::endl;
-
             std::vector<double> v = getVelocity(momentum);
             DblSpan velocity = zz::DblSpan(v);
             std::unique_ptr<Eigen::VectorXd> aPtr = getAction(velocity);
@@ -207,6 +203,18 @@ namespace zz {
             Dynamics<double> dynamics(position, velocity, action, gradient, momentum, lowerBounds,
                                       upperBounds);
             return operateImpl(dynamics, time);
+        }
+        
+        double operateIrreversible(DblSpan position, 
+                                   DblSpan velocity, 
+                                   double time) {
+            std::unique_ptr<Eigen::VectorXd> aPtr = getAction(velocity);
+            DblSpan action(*aPtr);
+            std::unique_ptr<Eigen::VectorXd> gPtr = getLogdGradient(position);
+            DblSpan gradient(*gPtr);
+            Dynamics<double> dynamics(position, velocity, action, gradient, nullptr, lowerBounds,
+                                      upperBounds);
+            return operateIrreversibleImpl(dynamics, time);
         }
 
         void setMean(DblSpan mean) {
@@ -271,13 +279,8 @@ namespace zz {
             BounceState bounceState(BounceType::NONE, -1, time);
 
             while (bounceState.isTimeRemaining()) {
-//                std::cerr << "start " << dynamics.position[0] << " " << dynamics.position[1] << " "
-//                          << dynamics.position[2] << " " << dynamics.position[3] << "\n";
-
                 const auto firstBounce = getNextBounce(dynamics);
                 bounceState = doBounce(bounceState, firstBounce, dynamics);
-//                std::cerr << "end " << dynamics.position[0] << " " << dynamics.position[1] << " "
-//                          << dynamics.position[2] << " " << dynamics.position[3] << "\n";
 
             }
 
@@ -288,87 +291,37 @@ namespace zz {
 
             return 0.0;
         }
+        
+        template<typename T>
+        double operateIrreversibleImpl(Dynamics<T> &dynamics, double time) {
+
+#ifdef TIMING
+            auto start = zz::chrono::steady_clock::now();
+#endif
+
+            BounceState bounceState(BounceType::NONE, -1, time);
+            while (bounceState.isTimeRemaining()) {
+                const auto firstBounce = getNextBounceIrreversible(dynamics);
+                bounceState = doBounceIrreversible(bounceState, firstBounce, dynamics);
+            }
+
+#ifdef TIMING
+            auto end = zz::chrono::steady_clock::now();
+            duration["operateIrreversibleImpl"] += zz::chrono::duration_cast<chrono::TimingUnits>(end - start).count();
+#endif
+
+            return 0.0;
+        }
 
         MinTravelInfo getNextBounce(DblSpan position,
                                     DblSpan velocity,
                                     DblSpan action,
                                     DblSpan gradient,
                                     DblSpan momentum) {
-
-#if 0
-            std::vector<double> b;
-
-            auto buffer = [&b](DblSpan& in, mm::MemoryManager<double>& out) {
-                mm::bufferedCopy(std::begin(in), std::end(in), std::begin(out), b);
-            };
-
-            buffer(position, mmPosition);
-            buffer(velocity, mmVelocity);
-            buffer(action, mmAction);
-            buffer(gradient, mmGradient);
-            buffer(momentum, mmMomentum);
-
-            return getNextBounce(
-                    Dynamics<double>(mmPosition, mmVelocity, mmAction, mmGradient, mmMomentum, dimension));
-#else
             return getNextBounce(
                     Dynamics<double>(position, velocity, action, gradient, momentum, lowerBounds,
                                      upperBounds));
-#endif
         }
-
-//        MinTravelInfo getNextBounceIrreversible(DblSpan position,
-//                                                DblSpan velocity,
-//                                                DblSpan action,
-//                                                DblSpan gradient) {
-//
-//            return getNextBounceIrreversible(
-//                    Dynamics<double>(position, velocity, action, gradient, nullptr, lowerBounds,
-//                                     upperBounds));
-//        }
-
-//        template<typename R>
-//        MinTravelInfo getNextBounceIrreversible(const Dynamics<R> &dynamics) {
-//
-//#ifdef TIMING
-//            auto start = zz::chrono::steady_clock::now();
-//#endif
-//
-//            auto task = [&](const size_t begin, const size_t end) -> MinTravelInfo {
-//
-//                const auto length = end - begin;
-//                const auto vectorCount = length - length % SimdSize;
-//
-//                MinTravelInfo travel = vectorized_transform<SimdType, SimdSize>(begin, begin + vectorCount, dynamics,
-//                                                                                InfoType());
-//
-//                if (vectorCount < length) { // Edge-case
-//                    travel = vectorized_transform<RealType, 1>(begin + vectorCount, end, dynamics, travel);
-//                }
-//
-//                return travel;
-//            };
-//
-////            MinTravelInfo travel = (nThreads <= 1) ?
-////                                   task(size_t(0), dimension) :
-////                                   parallel_task_reduce(
-////                                           size_t(0), dimension, MinTravelInfo(),
-////                                           task,
-////                                           [](MinTravelInfo lhs, MinTravelInfo rhs) {
-////                                               return (lhs.time < rhs.time) ? lhs : rhs;
-////                                           });
-//
-//            MinTravelInfo travel;
-//            travel.time = 42.0;
-//            travel.index = static_cast<int>(seed);
-//
-//#ifdef TIMING
-//            auto end = zz::chrono::steady_clock::now();
-//            duration["getNextBounceIrr"] += zz::chrono::duration_cast<chrono::TimingUnits>(end - start).count();
-//#endif
-//
-//            return travel;
-//        }
 
         template<typename R>
         MinTravelInfo getNextBounce(const Dynamics<R> &dynamics) {
@@ -386,6 +339,48 @@ namespace zz {
 
                 if (vectorCount < length) { // Edge-case
                     travel = vectorized_transform<RealType, 1>(begin + vectorCount, end, dynamics, travel);
+                }
+
+                return travel;
+            };
+
+            MinTravelInfo travel = (nThreads <= 1) ?
+                                   task(size_t(0), dimension) :
+                                   parallel_task_reduce(
+                                           size_t(0), dimension, MinTravelInfo(),
+                                           task,
+                                           [](MinTravelInfo lhs, MinTravelInfo rhs) {
+                                               return (lhs.time < rhs.time) ? lhs : rhs;
+                                           });
+
+#ifdef TIMING
+            auto end = zz::chrono::steady_clock::now();
+            duration["getNextBounce"] += zz::chrono::duration_cast<chrono::TimingUnits>(end - start).count();
+#endif
+
+            return travel;
+        }
+
+        template<typename R>
+        MinTravelInfo getNextBounceIrreversible(const Dynamics<R> &dynamics) {
+
+#ifdef TIMING
+            auto start = zz::chrono::steady_clock::now();
+#endif
+            for (int i = 0; i < dimension; ++i) {
+                unifRv[i] = distribution(generator);
+            }
+            
+            auto task = [&](const size_t begin, const size_t end) -> MinTravelInfo {
+
+                const auto length = end - begin;
+                const auto vectorCount = length - length % SimdSize;
+
+                MinTravelInfo travel = vectorized_transform_irreversible<SimdType, SimdSize>(begin, begin + vectorCount, dynamics,
+                                                                                InfoType(), unifRv);
+
+                if (vectorCount < length) { // Edge-case
+                    travel = vectorized_transform_irreversible<RealType, 1>(begin + vectorCount, end, dynamics, travel, unifRv);
                 }
 
                 return travel;
@@ -520,6 +515,54 @@ namespace zz {
 
             return horizontal_min(result);
         };
+        
+        template<typename S, int SimdSize, typename R, typename I, typename Int>
+        MinTravelInfo vectorized_transform_irreversible(
+            Int i, const Int end, const Dynamics<R> &dynamics, I result, double* unifRv) {
+
+            const auto *position = dynamics.position;
+            const auto *velocity = dynamics.velocity;
+            const auto *action = dynamics.action;
+            const auto *gradient = dynamics.gradient;
+            const auto *lowerBounds = dynamics.lowerBounds;
+            const auto *upperBounds = dynamics.upperBounds;
+            
+            for (; i < end; i += SimdSize) {
+
+                const auto boundaryTimeLower = findBoundaryTime(
+                        SimdHelper<S, R>::get(position + i),
+                        SimdHelper<S, R>::get(velocity + i),
+                        SimdHelper<S, R>::get(lowerBounds + i),
+                        -1
+                );
+                reduce_min(result, boundaryTimeLower, i, BounceType::BOUNDARY_LOWER);
+                const auto boundaryTimeUpper = findBoundaryTime(
+                        SimdHelper<S, R>::get(position + i),
+                        SimdHelper<S, R>::get(velocity + i),
+                        SimdHelper<S, R>::get(upperBounds + i),
+                        1
+                );
+                reduce_min(result, boundaryTimeUpper, i,
+                           BounceType::BOUNDARY_UPPER);
+                const auto firstPosTime = firstPositiveTime(
+                        - SimdHelper<S, R>::get(velocity + i) * SimdHelper<S, R>::get(gradient + i),
+                        SimdHelper<S, R>::get(velocity + i) * SimdHelper<S, R>::get(action + i)
+                );
+                const auto c = 
+                    - SimdHelper<S, R>::get(velocity + i) * log(SimdHelper<S, R>::get(unifRv + i)) 
+                    - firstPosTime * SimdHelper<S, R>::get(gradient + i)
+                    + firstPosTime * firstPosTime * SimdHelper<S, R>::get(action + i) / 2;
+                const auto gradientTime = minimumPositiveRootWithConstraint(
+                        -SimdHelper<S, R>::get(action + i) / 2,
+                        SimdHelper<S, R>::get(gradient + i),
+                        c, firstPosTime
+                );
+
+                reduce_min(result, gradientTime, i, BounceType::GRADIENT);
+            }
+
+            return horizontal_min(result);
+        };
 
         template<typename T>
         void innerBounceImpl(Dynamics<T> &dynamics,
@@ -599,11 +642,8 @@ namespace zz {
                                       simd_for_each<Size>(begin, end, simd, scalar);
                                   });
             }
-
-
         }
-
-
+        
         template<typename R>
         BounceState doBounce(BounceState initialBounceState, MinTravelInfo firstBounce, Dynamics<R> &dynamics) {
 
@@ -626,11 +666,43 @@ namespace zz {
 
                 DblSpan precisionColumn = DblSpan(&precisionMat(0, eventIndex), dimension);
                 if (eventType == BounceType::BOUNDARY_LOWER || eventType == BounceType::BOUNDARY_UPPER) {
-                    // std::cerr << lowerBounds[1] << std::endl;
                     reflectMomentum(dynamics, eventIndex);
                     setBoundaryPosition(dynamics, eventIndex, eventType);
                 } else {
                     setZeroMomentum(dynamics, eventIndex);
+                }
+
+                reflectVelocity(dynamics, eventIndex);
+                updateGradient(dynamics, eventTime);
+                updateAction(dynamics, eventIndex, precisionColumn);
+
+                finalBounceState = BounceState(eventType, eventIndex, remainingTime - eventTime);
+            }
+
+            return finalBounceState;
+        }
+        
+        template<typename R>
+        BounceState doBounceIrreversible(BounceState initialBounceState, MinTravelInfo firstBounce, Dynamics<R> &dynamics) {
+
+            double remainingTime = initialBounceState.time;
+            double eventTime = firstBounce.time;
+
+            BounceState finalBounceState;
+            if (remainingTime < eventTime) { // No event during remaining time
+                updatePosition<SimdType, SimdSize>(dynamics, remainingTime);
+                finalBounceState = BounceState(BounceType::NONE, -1, 0.0);
+
+            } else {
+
+                updatePosition<SimdType, SimdSize>(dynamics, eventTime);
+
+                const int eventType = firstBounce.type;
+                const int eventIndex = firstBounce.index;
+
+                DblSpan precisionColumn = DblSpan(&precisionMat(0, eventIndex), dimension);
+                if (eventType == BounceType::BOUNDARY_LOWER || eventType == BounceType::BOUNDARY_UPPER) {
+                    setBoundaryPosition(dynamics, eventIndex, eventType);
                 }
 
                 reflectVelocity(dynamics, eventIndex);
@@ -778,10 +850,6 @@ namespace zz {
             } else if (eventType == BounceType::BOUNDARY_UPPER) {
                 position[index] = R(upperBounds[index]);
             }
-//            else {
-//                std::cerr << "trying to set boundary position at non-boundary event" << std::endl;
-//                exit(-1);
-//            }
         }
 
         template<typename R>
@@ -919,6 +987,28 @@ namespace zz {
             const auto root = select(root1 < root2, root1, root2);
             return select(discriminant < T(0.0), infinity<T>(), root);
         }
+        
+        template<typename T>
+        static inline T firstPositiveTime(const T intercept, const T slope) {
+            auto time = select(intercept > T(0.0), T(0.0), - intercept / slope);
+            time = select(time >= T(0.0), time, infinity<T>());
+            return time;
+        }
+    
+        template<typename T>
+        static inline T minimumPositiveRootWithConstraint(const T a, const T b, const T c, const T lowerBd) {
+            const auto discriminant = b * b - 4 * a * c;
+            const auto sqrtDiscriminant = select(c == T(0.0), b, sqrt(fabs(discriminant)));
+    
+            auto root1 = (-b - sqrtDiscriminant) / (2 * a);
+            auto root2 = (-b + sqrtDiscriminant) / (2 * a);
+    
+            root1 = select(root1 > lowerBd, root1, infinity<T>());
+            root2 = select(root2 > lowerBd, root2, infinity<T>());
+    
+            const auto root = select(root1 < root2, root1, root2);
+            return select(discriminant < T(0.0), infinity<T>(), root);
+        }
 
         static mm::MemoryManager<MaskType> constructMask(double *raw, size_t length, bool zeroOneFlg) {
 
@@ -947,6 +1037,7 @@ namespace zz {
         mm::MemoryManager<double> mmAction;
         mm::MemoryManager<double> mmGradient;
         mm::MemoryManager<double> mmMomentum;
+        double* unifRv;
 
         Eigen::VectorXd meanV;
         Eigen::MatrixXd precisionMat;
@@ -964,6 +1055,8 @@ namespace zz {
         std::shared_ptr<tbb::global_control> control;
 
         std::vector<sitmo::threefry_20_64> rng;
+        std::mt19937 generator;
+        std::uniform_real_distribution<double> distribution;
 
 #ifdef TIMING
         std::map<std::string, long long> duration;
