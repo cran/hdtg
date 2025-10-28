@@ -1,4 +1,4 @@
-04a88b10aba0b8a5f672feeab1209f3d *DESCRIPTION
+a76dc36f18f1705e5142b94d310eade2 *DESCRIPTION
 3ee03818060459b75d17c04a94d6882a *LICENSE
 b82d803ffcb8c09100bb2951961cd64a *NAMESPACE
 44e62b9c6c1477213947381fd5c20182 *R/RcppExports.R
@@ -6,7 +6,7 @@ b82d803ffcb8c09100bb2951961cd64a *NAMESPACE
 6661fd5ae041ab6feace8819b69086b9 *R/harmonicHMC.R
 d005960f259369f2a53c505bb9298873 *R/hdtg.R
 714b4e9ea64d03ec40cadf9d3b7299a6 *R/zigzagHMC.R
-fa48244bcb59376a20168f2d99b4fb35 *build/partial.rdb
+587251c8896f33702d1778c4cc0c44f8 *build/partial.rdb
 f128e94c902415c9f17b8d2fa724c02b *cleanup
 9ab012d8fe17a592ea627a56d252ddb9 *configure
 9d2b2872c52ef6efb698efc3605748b0 *inst/CITATION
@@ -37,7 +37,7 @@ abf420fddd58dfc4a05cc1fec0eafbd9 *src/Simd.h
 328c9edef59a4ccb46511674f7a36d93 *src/Timing.h
 600f9b831014f71a3a6a84b32fd58140 *src/UniformGenerator.h
 c702cfc50727549ab957f03c8877f775 *src/ZigZag.h
-eee5f3a88a918eaf7b05597988c62a5e *src/aligned_allocator.h
+cdd849a5db8f3223f6be07171c7130fa *src/aligned_allocator.h
 cabd3a60c2f057ec8299218c3e53f9e4 *src/dr_evomodel_operators_NativeZigZag.h
 79bece983fd88587bbb9d6023fc49708 *src/span.h
 93c4c1bebd8ac89a9120d54829f42225 *src/sse2neon.h
